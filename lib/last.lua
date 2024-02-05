@@ -516,6 +516,7 @@ local typeMetadata = {
 	},
 
 	NumberRange = {
+
 		springType = LinearSpring.new,
 
 		toIntermediate = function(value)
@@ -528,6 +529,7 @@ local typeMetadata = {
 	},
 
 	UDim = {
+
 		springType = LinearSpring.new,
 
 		toIntermediate = function(value)
@@ -540,6 +542,7 @@ local typeMetadata = {
 	},
 
 	UDim2 = {
+
 		springType = LinearSpring.new,
 
 		toIntermediate = function(value)
@@ -554,6 +557,7 @@ local typeMetadata = {
 	},
 
 	Vector2 = {
+
 		springType = LinearSpring.new,
 
 		toIntermediate = function(value)

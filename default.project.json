@@ -1,6 +1,4 @@
 {
   "name": "Spring",
-  "tree": {
-    "$path": "lib"
-  }
+  "tree": { "$path": "lib" }
 }

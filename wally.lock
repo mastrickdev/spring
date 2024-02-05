@@ -3,6 +3,16 @@
 registry = "test"
 
 [[package]]
-name = "marco/spring"
-version = "0.1.0"
+name = "evaera/promise"
+version = "4.0.0"
 dependencies = []
+
+[[package]]
+name = "lukadev-0/typed-promise"
+version = "4.0.2"
+dependencies = [["Promise", "evaera/promise@4.0.0"]]
+
+[[package]]
+name = "mastrickdev/spring"
+version = "0.1.3"
+dependencies = [["Promise", "evaera/promise@4.0.0"], ["TypedPromise", "lukadev-0/typed-promise@4.0.2"]]

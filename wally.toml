@@ -1,11 +1,10 @@
 [package]
 name = "mastrickdev/spring"
-version = "0.1.0"
+version = "0.1.3"
 registry = "https://github.com/UpliftGames/wally-index"
 realm = "shared"
 description = "Springs are powerful approach for describing fluid, physically-based animation. Spring is a high-performance and user-friendly motion library for Roblox based on springs."
 
-[github]
-token = "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"
-
 [dependencies]
+Promise = "evaera/promise@4.0.0"
+TypedPromise = "lukadev-0/typed-promise@4.0.2"

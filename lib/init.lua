@@ -2,11 +2,19 @@
 --!native
 
 --// Services
+local ProximityPromptService = game:GetService("ProximityPromptService")
 local RunService = game:GetService("RunService")
+
+--// Packages
+local Promise = require(script.Parent.TypedPromise)
+
+--// Import Types
+type Promise = Promise.Promise
 
 --// Abbreviations
 local rad = math.rad
 local pi = math.pi
+local huge = math.huge
 local exp = math.exp
 local sin = math.sin
 local cos = math.cos
@@ -21,6 +29,33 @@ local SLEEP_ROTATION_OFFSET = rad(0.01)
 local SLEEP_ROTATION_VELOCITY = rad(0.1)
 local EPSILON = 1e-5
 local AXIS_MATRIX_EPSILON = 1e-6
+
+local PSEUDO_PROPERTIES = {
+
+	Pivot = {
+
+		class = "PVInstance",
+
+		get = function(instance: PVInstance) return instance:GetPivot() end,
+		set = function(instance: PVInstance, value: CFrame) instance:PivotTo(value) end
+
+	} :: PropertyOverride<PVInstance, CFrame>,
+
+	Scale = {
+
+		class = "Model",
+
+		get = function(instance: Model) return instance:GetScale() end,
+		set = function(instance: Model, value: number) instance:ScaleTo(value) end
+
+	} :: PropertyOverride<Model, number>
+}
+
+local renderSpringStates: {[Instance]: Properties} = {}
+local otherSpringStates: {[Instance]: Properties} = {}
+
+local completedCallbacks: {[number]: () -> nil} = {}
+local interpolationProperties: {[number]: { name: string, instance: Instance, id: number, rawGoal: any }} = {}
 
 --// Functions
 local function getSquaredMagnitude(magnitude: Magnitude)
@@ -40,6 +75,167 @@ end
 local function getSinRatio(deltaTime: number, root: number)
 
     return deltaTime + ((deltaTime ^ 2) * (root ^ 2) ^ 2 / 20 - root ^ 2) * (deltaTime ^ 3) / 6
+end
+
+local function assertType(argumentNumber: number, expectedType: string, value: any)
+    local functionName = debug.info(2, "n")
+
+    if typeof(value) ~= expectedType then error(`bad argument #{argumentNumber} to {"Spring." .. functionName} ({expectedType} expected, got {typeof(value)})`, 3) end
+end
+
+local function getProperty(instance: Instance, propertyName: string)
+	local override = PSEUDO_PROPERTIES[propertyName]
+
+	if override and instance:IsA(override.class) then return override.get(instance) else return instance[propertyName] end
+end
+
+local function setProperty(instance: Instance, propertyName: string, value: any)
+	local override = PSEUDO_PROPERTIES[propertyName]
+
+	if override and instance:IsA(override.class) then override.set(instance, value) else instance[propertyName] = value end
+end
+
+local function inverseGammaCorrectD65(colorValue: number)
+
+    return colorValue < 0.0404482362771076 and colorValue / 12.92 or 0.87941546140213 * (colorValue + 0.055) ^ 2.4
+end
+
+local function gammaCorrectD65(colorValue: number)
+
+    return colorValue < 3.1306684425e-3 and 12.92 * colorValue or 1.055 * colorValue ^ (1 / 2.4) - 0.055
+end
+
+function rgbToLUV(color3: Color3)
+    local r, g, b = color3.R, color3.G, color3.B
+
+    r = inverseGammaCorrectD65(r)
+    g = inverseGammaCorrectD65(g)
+    b = inverseGammaCorrectD65(b)
+
+    local x = 0.9257063972951867 * r - 0.8333736323779866 * g - 0.09209820666085898 * b
+    local y = 0.2125862307855956 * r + 0.71517030370341085 * g + 0.0722004986433362 * b
+    local z = 3.6590806972265883 * r + 11.4426895800574232 * g + 4.1149915024264843 * b
+
+    local l = y > 0.008856451679035631 and 116 * y ^ (1 / 3) - 16 or 903.296296296296 * y
+    local u
+    local v
+
+    if z > 1e-14 then
+
+        u = l * x / z
+        v = l * (9 * y / z - 0.46832)
+    else
+
+        u = -0.19783 * l
+        v = -0.46832 * l
+    end
+
+    return { l, u, v }
+end
+
+function luvToRGB(luv: {number})
+    local l = luv[1]
+    if l < 0.0197955 then return Color3.new(0, 0, 0) end
+
+    local u = luv[2] / l + 0.19783
+    local v = luv[3] / l + 0.46832
+
+    local y = (l + 16) / 116 do y = y > 0.206896551724137931 and y ^ 3 or 0.12841854934601665 * y - 0.01771290335807126 end
+    local x = y * u / v
+    local z = y * ((3 - 0.75 * u) / v - 5)
+
+    local r =  7.2914074 * x - 1.5372080 *y - 0.4986286 *z
+    local g = -2.1800940 * x + 1.8757561 *y + 0.0415175 *z
+    local b =  0.1253477 * x - 0.2040211 *y + 1.0569959 *z
+
+    if r < 0 and r < g and r < b then
+
+        r, g, b = 0, g - r, b - r
+    elseif g < 0 and g < b then
+
+        r, g, b = r - g, 0, b - g
+    elseif b < 0 then
+
+        r, g, b = r - b, g - b, 0
+    end
+
+    return Color3.new( min(gammaCorrectD65(r), 1), min(gammaCorrectD65(g), 1), min(gammaCorrectD65(b), 1) )
+end
+
+local function getInterpolationPropertyOf(instance: Instance, propertyName: string)
+
+    for index, interpolationProperty in interpolationProperties do
+
+        if interpolationProperty.instance == instance and interpolationProperty.name == propertyName then return index, interpolationProperty end
+     end
+end
+
+local function haveInterpolationProperties(instance: number, id: number)
+
+    for index, interpolationProperty in interpolationProperties do
+
+        if interpolationProperty.instance == instance and interpolationProperty.id == id then return index, interpolationProperty end
+    end
+end
+
+local function clearInterpolationPropertiesWithSameGoal<T>(instance: number, propertyName: string, rawGoal: T)
+
+    for index, interpolationProperty in interpolationProperties do
+
+        if interpolationProperty.instance ~= instance then continue end
+        if interpolationProperty.name ~= propertyName then continue end
+        if interpolationProperty.rawGoal ~= rawGoal then continue end
+
+        local id = interpolationProperty.id
+        local completedCallback = completedCallbacks[id]
+
+        interpolationProperties[index] = nil
+        if not completedCallback then continue end
+
+        completedCallback()
+        completedCallbacks[id] = nil
+    end
+end
+
+local function processSprings(springStates: {[Instance]: Properties}, deltaTime: number)
+
+	for instance, springState in springStates do
+
+		for propertyName, spring: LinearSpring | RotationSpring | CFrameSpring in springState do
+
+			if spring:canSleep() then
+                local index, interpolationProperty = getInterpolationPropertyOf(instance, propertyName)
+                local id = interpolationProperty.id
+                local completedCallback = completedCallbacks[id]
+
+                interpolationProperties[index] = nil
+				springState[propertyName] = nil
+
+				setProperty(instance, propertyName, spring.rawGoal)
+                if not haveInterpolationProperties(instance, id) then completedCallbacks[id] = nil; completedCallback() end
+
+                clearInterpolationPropertiesWithSameGoal(instance, propertyName, spring.rawGoal)
+			else
+
+				setProperty(instance, propertyName, spring:step(deltaTime))
+			end
+		end
+
+		if not next(springState) then springStates[instance] = nil end
+	end
+end
+
+local function getBiggerCompletedCallbackId()
+    local biggerId = 1
+
+    for id in completedCallbacks do if id > biggerId then biggerId = id end end
+    return biggerId
+end
+
+local function getCompletedCallbackId()
+    local biggerId = getBiggerCompletedCallbackId()
+
+    for id = 1, biggerId + 1 do if not completedCallbacks[id] then return id end end
 end
 
 --// Linear Spring Class
@@ -137,8 +333,10 @@ function LinearSpring:step(deltaTime: number)
         end
     else
 
-        
+        --
     end
+
+    return self.typeMetadata.fromIntermediate(self.position)
 end
 
 --// Rotation Spring Class
@@ -147,21 +345,193 @@ local RotationSpring = {}
 --// CFrame Spring Class
 local CFrameSpring = {}
 
+--// Type Metadata
+local typeMetadata = {
+
+	boolean = {
+
+		springType = LinearSpring.new,
+
+		toIntermediate = function(value) return { value and 1 or 0 } end,
+		fromIntermediate = function(value) return value[1] >= 0.5 end
+
+	} :: TypeMetadata<boolean>,
+
+	number = {
+
+		springType = LinearSpring.new,
+
+		toIntermediate = function(value) return { value } end,
+        fromIntermediate = function(value) return value[1] end
+
+	} :: TypeMetadata<number>,
+
+	NumberRange = {
+
+		springType = LinearSpring.new,
+
+		toIntermediate = function(value) return { value.Min, value.Max } end,
+		fromIntermediate = function(value) return NumberRange.new(value[1], value[2]) end
+
+	} :: TypeMetadata<NumberRange>,
+
+	UDim = {
+
+		springType = LinearSpring.new,
+
+		toIntermediate = function(value) return { value.Scale, value.Offset } end,
+		fromIntermediate = function(value) return UDim.new(value[1], round(value[2])) end
+
+	} :: TypeMetadata<UDim>,
+
+	UDim2 = {
+
+		springType = LinearSpring.new,
+
+		toIntermediate = function(value)
+			local x = value.X
+			local y = value.Y
+
+			return { x.Scale, x.Offset, y.Scale, y.Offset }
+		end,
+
+		fromIntermediate = function(value) return UDim2.new(value[1], round(value[2]), value[3], round(value[4])) end
+
+	} :: TypeMetadata<UDim2>,
+
+	Vector2 = {
+
+		springType = LinearSpring.new,
+
+		toIntermediate = function(value) return { value.X, value.Y } end,
+		fromIntermediate = function(value) return Vector2.new(value[1], value[2]) end
+
+	} :: TypeMetadata<Vector2>,
+
+	Vector3 = {
+
+        springType = LinearSpring.new,
+
+        toIntermediate = function(value) return { value.X, value.Y, value.Z } end,
+        fromIntermediate = function(value) return Vector3.new(value[1], value[2], value[3]) end
+
+    } :: TypeMetadata<Vector3>,
+
+	Color3 = {
+
+		springType = LinearSpring.new,
+
+		toIntermediate = rgbToLUV,
+		fromIntermediate = luvToRGB
+
+	} :: TypeMetadata<Color3>,
+
+	ColorSequence = {
+
+		springType = LinearSpring.new,
+
+		toIntermediate = function(value)
+			local keypoints = value.Keypoints
+
+			local origin = rgbToLUV(keypoints[1].Value)
+			local goal = rgbToLUV(keypoints[#keypoints].Value)
+
+			return { origin[1], origin[2], origin[3], goal[1], goal[2], goal[3], }
+		end,
+
+		fromIntermediate = function(value) return ColorSequence.new( luvToRGB{value[1], value[2], value[3]}, luvToRGB{value[4], value[5], value[6]} ) end
+
+	} :: TypeMetadata<ColorSequence>,
+
+	CFrame = {
+
+		springType = CFrameSpring.new,
+
+		toIntermediate = error, -- custom (CFrameSpring)
+		fromIntermediate = error -- custom (CFrameSpring)
+
+	}
+}
+
 --// Spring
 local Spring = {}
+
+--// Functions
+function Spring.target(instance: Instance, dampingRatio: number, frequency: number, properties: Properties)
+
+    assertType(1, "Instance", instance)
+    assertType(2, "number", dampingRatio)
+
+    assertType(3, "number", frequency)
+    assertType(4, "table", properties)
+
+    if dampingRatio < 0 then error(("expected damping ratio >= 0; got %.2f"):format(dampingRatio), 2) end
+    if frequency < 0 then error(("expected undamped frequency >= 0; got %.2f"):format(frequency), 2) end
+
+    local springStates: {[Instance]: Properties} = if instance:IsA("Camera") then renderSpringStates else otherSpringStates
+    local springState = springStates[instance]
+
+    local id = getCompletedCallbackId()
+    local promise = Promise.new(function(resolve) completedCallbacks[id] = resolve end)
+
+    if not springState then springState = {}; springStates[instance] = springState end
+
+    for propertyName, rawGoal in properties do
+        local origin = getProperty(instance, propertyName)
+
+        if typeof(rawGoal) ~= typeof(origin) then error(`bad property {propertyName} to Spring.target ({typeof(origin)} expected, got {typeof(rawGoal)})`, 2) end
+        if frequency == huge then setProperty(instance, propertyName, rawGoal); springState[propertyName] = nil continue end
+
+        table.insert(interpolationProperties, { id = id, instance = instance, name = propertyName, rawGoal = rawGoal })
+        local spring = springState[propertyName]
+
+        if not spring then
+            local metadata = typeMetadata[typeof(rawGoal)]
+            if not metadata then error(`unsupported type: {typeof(rawGoal)}`, 2) end
+
+            spring = metadata.springType(dampingRatio, frequency, origin, rawGoal, metadata)
+            springState[propertyName] = spring
+        end
+
+        spring:setGoal(rawGoal)
+        spring:setDampingRatio(dampingRatio)
+        spring:setFrequency(frequency)
+    end
+
+	if not next(springState) then springStates[instance] = nil end
+    return promise
+end
+
+--// Events
+RunService.PreSimulation:Connect(function(deltaTime) processSprings(otherSpringStates, deltaTime) end)
+RunService.PostSimulation:Connect(function(deltaTime) processSprings(renderSpringStates, deltaTime) end)
 
 --// Types
 type LinearSpring = typeof(LinearSpring.Constructor())
 type RotationSpring = typeof(RotationSpring.new())
 type CFrameSpring = typeof(CFrameSpring.new())
 
-type Magnitude = { number }
+type Magnitude = {number}
 type TypeMetadata<T> = {
 
     springType: LinearSpring | RotationSpring | CFrameSpring,
     toIntermediate: (value: T) -> Magnitude,
     fromIntermediate: (magnitude: Magnitude) -> T
 }
+
+type Properties = {[string]: any}
+type PropertyOverride<instance, value> = {
+
+	class: string,
+
+	get: (instance: instance) -> value,
+	set: (instance: instance, value: value) -> nil
+}
+
+task.spawn(function()
+
+    while task.wait(1) do print(otherSpringStates, completedCallbacks, interpolationProperties) end
+end)
 
 --// End
 return table.freeze(Spring)
