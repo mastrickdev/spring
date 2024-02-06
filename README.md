@@ -1,6 +1,6 @@
 # Spring
 
-Spring is an animation library for Roblox, which uses the method of [harmonic response](https://en.wikipedia.org/wiki/Harmonic_response) to create smooth and natural movements. Spring allows you to animate any property of any instance, using only two variables: **damping ratio** and **frequency**.
+Spring is an animation library for Roblox, which uses the method of harmonic response to create smooth and natural movements. Spring allows you to animate any property of any instance, using only two variables: **damping ratio** and **frequency**.
 
 ## Usability
 
