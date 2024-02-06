@@ -1,6 +1,13 @@
 --!strict
 --!native
 
+-----------------------[[ Spring-driven motion library ]]----------------------------------------------
+
+-- Credits for: https://github.com/Fraktality/spr
+-- Visualizer: https://www.desmos.com/calculator/rzvw27ljh9
+
+---------------------------------------------------------------------
+
 --// Services
 local RunService = game:GetService("RunService")
 
