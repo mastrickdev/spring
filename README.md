@@ -18,9 +18,7 @@ Then, you can create an animation using the method `Spring.target`, which takes 
 - `properties`: a table that contains the properties that you want to animate and the target values. For example, if you want to animate the position and orientation of a `BasePart`, you can use something like:
 
 ```lua
-Spring.target(basePart, 0.75, 1, { 
-    CFrame = CFrame.new(20, 20, 20) 
-})
+Spring.target(basePart, 0.75, 1, {  CFrame = CFrame.new(20, 20, 20) })
 ```
 
 The method `Spring.target` returns a `Promise`, which is an object that represents an asynchronous operation. You can use the method `:andThen` to execute a function when the animation finishes, or the method `:cancel` to cancel the animation and the `Promise`. For example, if you want to print a message when the animation is over, you can do something like:
