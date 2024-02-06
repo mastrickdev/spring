@@ -5,10 +5,9 @@
 		"$className": "DataModel",
 		"ServerScriptService": {
 			"$className": "ServerScriptService",
+			"$path": "package",
 
-			"Spring": { "$path": "lib" },
-			"Promise": { "$path": "package/promise" },
-			"TypedPromise": { "$path": "package/typed-promise" }
+			"Spring": { "$path": "lib" }
 		}
 	}
 }

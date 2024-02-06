@@ -765,35 +765,4 @@ function spr.target(instance: Instance, dampingRatio: number, frequency: number,
 	end
 end
 
-function spr.stop(instance: Instance, property: string?)
-	if STRICT_RUNTIME_TYPES then
-		assertType(1, "spr.stop", "Instance", instance)
-		assertType(2, "spr.stop", "string|nil", property)
-	end
-
-	if property then
-		local state = springStates_other[instance] or springStates_render[instance]
-		if state then
-			state[property] = nil
-		end
-	else
-		springStates_other[instance] = nil
-		springStates_render[instance] = nil
-	end
-end
-
-function spr.completed(instance: Instance, callback: ()->())
-	if STRICT_RUNTIME_TYPES then
-		assertType(1, "spr.completed", "Instance", instance)
-		assertType(2, "spr.completed", "function", callback)
-	end
-
-	local callbackList = completedCallbacks[instance]
-	if callbackList then
-		table.insert(callbackList, callback)
-	else
-		completedCallbacks[instance] = {callback}
-	end
-end
-
 return table.freeze(spr)

@@ -2,11 +2,10 @@
 --!native
 
 --// Services
-local ProximityPromptService = game:GetService("ProximityPromptService")
 local RunService = game:GetService("RunService")
 
 --// Packages
-local Promise = require(script.Parent.TypedPromise)
+local Promise = require(script.Parent.Promise)
 
 --// Import Types
 type Promise = Promise.Promise
@@ -21,6 +20,7 @@ local cos = math.cos
 local min = math.min
 local sqrt = math.sqrt
 local round = math.round
+local abs = math.abs
 
 --// Vars | Constants
 local SLEEP_OFFSET_SQUARE_LIMIT = (1 / 3840) ^ 2
@@ -144,9 +144,9 @@ function luvToRGB(luv: {number})
     local x = y * u / v
     local z = y * ((3 - 0.75 * u) / v - 5)
 
-    local r =  7.2914074 * x - 1.5372080 *y - 0.4986286 *z
-    local g = -2.1800940 * x + 1.8757561 *y + 0.0415175 *z
-    local b =  0.1253477 * x - 0.2040211 *y + 1.0569959 *z
+    local r =  7.2914074 * x - 1.5372080 * y - 0.4986286 * z
+    local g = -2.1800940 * x + 1.8757561 * y + 0.0415175 * z
+    local b =  0.1253477 * x - 0.2040211 * y + 1.0569959 * z
 
     if r < 0 and r < g and r < b then
 
@@ -170,15 +170,19 @@ local function getInterpolationPropertyOf(instance: Instance, propertyName: stri
      end
 end
 
-local function haveInterpolationProperties(instance: number, id: number)
+local function haveInterpolationProperties(instance: Instance, id: number?)
 
     for index, interpolationProperty in interpolationProperties do
 
-        if interpolationProperty.instance == instance and interpolationProperty.id == id then return index, interpolationProperty end
+        if interpolationProperty.instance == instance then
+
+            if id then if interpolationProperty.id ~= id then continue end end
+            return index, interpolationProperty
+        end
     end
 end
 
-local function clearInterpolationPropertiesWithSameGoal<T>(instance: number, propertyName: string, rawGoal: T)
+local function clearInterpolationPropertiesWithSameGoal<T>(instance: Instance, propertyName: string, rawGoal: T)
 
     for index, interpolationProperty in interpolationProperties do
 
@@ -197,6 +201,18 @@ local function clearInterpolationPropertiesWithSameGoal<T>(instance: number, pro
     end
 end
 
+local function cancelInterpolationPropertiesOf(instance: Instance)
+
+    for index, interpolationProperty in interpolationProperties do
+
+        if interpolationProperty.instance ~= instance then continue end
+        local id = interpolationProperty.id
+
+        interpolationProperties[index] = nil
+        completedCallbacks[id] = nil
+    end
+end
+
 local function processSprings(springStates: {[Instance]: Properties}, deltaTime: number)
 
 	for instance, springState in springStates do
@@ -209,7 +225,7 @@ local function processSprings(springStates: {[Instance]: Properties}, deltaTime:
                 local completedCallback = completedCallbacks[id]
 
                 interpolationProperties[index] = nil
-				springState[propertyName] = nil
+                springState[propertyName] = nil
 
 				setProperty(instance, propertyName, spring.rawGoal)
                 if not haveInterpolationProperties(instance, id) then completedCallbacks[id] = nil; completedCallback() end
@@ -238,12 +254,30 @@ local function getCompletedCallbackId()
     for id = 1, biggerId + 1 do if not completedCallbacks[id] then return id end end
 end
 
+local function angleBetween(origin: CFrame, goal: CFrame)
+    local _, angle = (goal:ToObjectSpace(origin)):ToAxisAngle()
+
+    return abs(angle)
+end
+
+local function matrixToAxis(matrix: CFrame)
+    local axis, angle = matrix:ToAxisAngle()
+
+    return axis * angle
+end
+
+local function axisToMatrix(axis: Vector3)
+    local magnitude = axis.Magnitude
+
+    if magnitude > AXIS_MATRIX_EPSILON then return CFrame.fromAxisAngle(axis.Unit, magnitude) else return CFrame.identity end
+end
+
 --// Linear Spring Class
 local LinearSpring = {}
 LinearSpring.__index = LinearSpring
 
 --// Constructor
-function LinearSpring.new<T>(...)
+function LinearSpring.new(...)
     local self = setmetatable({}, LinearSpring)
 
     LinearSpring.Constructor(self, ...)
@@ -268,20 +302,20 @@ function LinearSpring:Constructor<T>(dampingRatio: number, frequency: number, po
 end
 
 --// Methods
-function LinearSpring:setGoal<T>(goal: T)
+function LinearSpring:setGoal<T>(value: T)
 
-    self.rawGoal = goal
-    self.goal = self.typeMetadata.toIntermediate(goal)
+    self.rawGoal = value
+    self.goal = self.typeMetadata.toIntermediate(value)
 end
 
-function LinearSpring:setDampingRatio(dampingRatio: number)
+function LinearSpring:setDampingRatio(value: number)
 
-    self.dampingRatio = dampingRatio
+    self.dampingRatio = value
 end
 
-function LinearSpring:setFrequency(frequency: number)
+function LinearSpring:setFrequency(value: number)
 
-    self.frequency = frequency
+    self.frequency = value
 end
 
 function LinearSpring:canSleep()
@@ -311,6 +345,7 @@ function LinearSpring:step(deltaTime: number)
 
             self.position[index] = offset * coefficients.Position + self.velocity[index] * timeFactor + self.goal[index]
             self.velocity[index] = self.velocity[index] * coefficients.Velocity - offset * coefficients.Frequency
+
         end
     elseif self.dampingRatio < 1 then
         local decayFactor = exp(-self.dampingRatio * angularFrequency * deltaTime)
@@ -330,10 +365,27 @@ function LinearSpring:step(deltaTime: number)
 
             self.position[index] = (offset * (cosAngle + sinRatio * self.dampingRatio) + self.velocity[index] * sinDivision) * decayFactor + self.goal[index]
             self.velocity[index] = (self.velocity[index] * (cosAngle - sinRatio * self.dampingRatio) - offset * (sinRatio * angularFrequency)) * decayFactor
+
         end
     else
+        local dampingConstant = sqrt(self.dampingRatio * self.dampingRatio - 1)
 
-        --
+		local decayRate1 = -angularFrequency * (self.dampingRatio - dampingConstant)
+		local decayRate2 = -angularFrequency * (self.dampingRatio + dampingConstant)
+
+		local decayFactor1 = exp(decayRate1 * deltaTime)
+		local decayFactor2 = exp(decayRate2 * deltaTime)
+
+		for index = 1, #self.position do
+			local offset = self.position[index] - self.goal[index]
+
+			local coefficient2 = (self.velocity[index] - offset * decayRate1) / (2 * angularFrequency * dampingConstant)
+			local coefficient1 = decayFactor1 * (offset - coefficient2)
+
+			self.position[index] = coefficient1 + coefficient2 * decayFactor2 + self.goal[index]
+			self.velocity[index] = coefficient1 * decayRate1 + coefficient2 * decayFactor2 * decayRate2
+
+		end
     end
 
     return self.typeMetadata.fromIntermediate(self.position)
@@ -341,9 +393,163 @@ end
 
 --// Rotation Spring Class
 local RotationSpring = {}
+RotationSpring.__index = RotationSpring
+
+--// Constructor
+function RotationSpring.new(...)
+    local self = setmetatable({}, RotationSpring)
+
+    RotationSpring.Constructor(self, ...)
+    return self
+end
+
+function RotationSpring:Constructor(dampingRatio: number, frequency: number, position: CFrame, goal: CFrame)
+
+    self.dampingRatio = dampingRatio
+    self.frequency = frequency
+
+    self.position = position
+    self.goal = goal
+
+    self.velocity = Vector3.zero
+    return self
+end
+
+--// Methods
+function RotationSpring:setGoal(value: CFrame)
+
+    self.goal = value
+end
+
+function RotationSpring:setDampingRatio(value: number)
+
+    self.dampingRatio = value
+end
+
+function RotationSpring:setFrequency(value: number)
+
+    self.frequency = value
+end
+
+function RotationSpring:canSleep()
+    local position = angleBetween(self.position, self.goal) < SLEEP_ROTATION_OFFSET
+    local velocity = self.velocity.Magnitude < SLEEP_ROTATION_VELOCITY
+
+    return position and velocity
+end
+
+function RotationSpring:step(deltaTime: number)
+    local angularFrequency = self.frequency * pi * 2
+
+    local angularDisplacement = matrixToAxis(self.position * self.goal:Inverse())
+    local decayFactor = exp(-self.dampingRatio * angularFrequency * deltaTime)
+
+    local finalPosition: CFrame
+    local finalVelocity: Vector3
+
+    if self.dampingRatio == 1 then
+
+        finalPosition = axisToMatrix((angularDisplacement * (1 + angularFrequency * deltaTime) + self.velocity * deltaTime) * decayFactor) * self.goal
+        finalVelocity = (self.velocity * (1 - deltaTime * angularFrequency) - angularDisplacement * (deltaTime * angularFrequency * angularFrequency)) * decayFactor
+
+    elseif self.dampingRatio < 1 then
+        local dampingConstant = sqrt(1 - self.dampingRatio * self.dampingRatio)
+
+        local cosTerm = cos(deltaTime * angularFrequency * dampingConstant)
+        local sinTerm = sin(deltaTime * angularFrequency * dampingConstant)
+
+        local velocityCoefficient = sinTerm / (angularFrequency * dampingConstant)
+        local displacementCoefficient = sinTerm / dampingConstant
+
+        finalPosition = axisToMatrix((angularDisplacement * (cosTerm + displacementCoefficient * self.dampingRatio) + self.velocity * velocityCoefficient) * decayFactor) * self.goal
+        finalVelocity = (self.velocity * (cosTerm - displacementCoefficient * self.dampingRatio) - angularDisplacement * (displacementCoefficient * angularFrequency)) * decayFactor
+
+    else
+        local dampingConstant = sqrt(self.dampingRatio * self.dampingRatio - 1)
+
+        local decayRate1 = -angularFrequency * (self.dampingRatio - dampingConstant)
+        local decayRate2 = -angularFrequency * (self.dampingRatio + dampingConstant)
+
+        local coefficient2 = (self.velocity - angularDisplacement * decayRate1) / (2  * angularFrequency * dampingConstant)
+        local coefficient1 = angularDisplacement - coefficient2
+
+        local decayFactor1 = coefficient1 * exp(decayRate1 * deltaTime)
+        local decayFactor2 = coefficient2 * exp(decayRate2 * deltaTime)
+
+        finalPosition = axisToMatrix(decayFactor1 + decayFactor2) * self.goal
+        finalVelocity = decayFactor1 * decayRate1 + decayFactor2 * decayRate2
+
+    end
+
+    self.position = finalPosition
+    self.velocity = finalVelocity
+
+    return finalPosition
+end
+
+--// Vector3 Metadata
+local vector3Metadata: TypeMetadata<Vector3> = {
+
+    springType = LinearSpring.new,
+
+    toIntermediate = function(value) return { value.X, value.Y, value.Z } end,
+    fromIntermediate = function(value) return Vector3.new(value[1], value[2], value[3]) end
+}
 
 --// CFrame Spring Class
 local CFrameSpring = {}
+CFrameSpring.__index = CFrameSpring
+
+--// Constructor
+function CFrameSpring.new(...)
+    local self = setmetatable({}, CFrameSpring)
+
+    CFrameSpring.Constructor(self, ...)
+    return self
+end
+
+function CFrameSpring:Constructor(dampingRatio: number, frequency: number, origin: CFrame, goal: CFrame)
+
+    self.rawGoal = goal
+
+    self.position = LinearSpring.new(dampingRatio, frequency, origin.Position, goal.Position, vector3Metadata)
+    self.rotation = RotationSpring.new(dampingRatio, frequency, origin.Rotation, goal.Rotation)
+
+    return self
+end
+
+--// Methods
+function CFrameSpring:setGoal(value: CFrame)
+
+    self.rawGoal = value
+
+    self.position:setGoal(value.Position)
+    self.rotation:setGoal(value.Rotation)
+end
+
+function CFrameSpring:setDampingRatio(value: number)
+
+    self.position:setDampingRatio(value)
+    self.rotation:setDampingRatio(value)
+end
+
+function CFrameSpring:setFrequency(value: number)
+
+    self.position:setFrequency(value)
+    self.rotation:setFrequency(value)
+end
+
+function CFrameSpring:canSleep()
+
+    return self.position:canSleep() and self.rotation:canSleep()
+end
+
+function CFrameSpring:step(deltaTime)
+    local position: Vector3 = self.position:step(deltaTime)
+    local rotation: CFrame = self.rotation:step(deltaTime)
+
+    return rotation + position
+end
 
 --// Type Metadata
 local typeMetadata = {
@@ -408,14 +614,7 @@ local typeMetadata = {
 
 	} :: TypeMetadata<Vector2>,
 
-	Vector3 = {
-
-        springType = LinearSpring.new,
-
-        toIntermediate = function(value) return { value.X, value.Y, value.Z } end,
-        fromIntermediate = function(value) return Vector3.new(value[1], value[2], value[3]) end
-
-    } :: TypeMetadata<Vector3>,
+	Vector3 = vector3Metadata,
 
 	Color3 = {
 
@@ -436,7 +635,7 @@ local typeMetadata = {
 			local origin = rgbToLUV(keypoints[1].Value)
 			local goal = rgbToLUV(keypoints[#keypoints].Value)
 
-			return { origin[1], origin[2], origin[3], goal[1], goal[2], goal[3], }
+			return { origin[1], origin[2], origin[3], goal[1], goal[2], goal[3] }
 		end,
 
 		fromIntermediate = function(value) return ColorSequence.new( luvToRGB{value[1], value[2], value[3]}, luvToRGB{value[4], value[5], value[6]} ) end
@@ -457,6 +656,16 @@ local typeMetadata = {
 local Spring = {}
 
 --// Functions
+function Spring._cancel(instance: Instance, id: number)
+
+    assertType(1, "Instance", instance)
+
+    otherSpringStates[instance] = nil
+    renderSpringStates[instance] = nil
+
+    cancelInterpolationPropertiesOf(instance)
+end
+
 function Spring.target(instance: Instance, dampingRatio: number, frequency: number, properties: Properties)
 
     assertType(1, "Instance", instance)
@@ -468,38 +677,50 @@ function Spring.target(instance: Instance, dampingRatio: number, frequency: numb
     if dampingRatio < 0 then error(("expected damping ratio >= 0; got %.2f"):format(dampingRatio), 2) end
     if frequency < 0 then error(("expected undamped frequency >= 0; got %.2f"):format(frequency), 2) end
 
-    local springStates: {[Instance]: Properties} = if instance:IsA("Camera") then renderSpringStates else otherSpringStates
-    local springState = springStates[instance]
+    return Promise.new(function(resolve, reject, onCancel)
+        local springStates: {[Instance]: Properties} = if instance:IsA("Camera") then renderSpringStates else otherSpringStates
+        local springState = springStates[instance]
 
-    local id = getCompletedCallbackId()
-    local promise = Promise.new(function(resolve) completedCallbacks[id] = resolve end)
+        local id = getCompletedCallbackId()
+        if not springState then springState = {}; springStates[instance] = springState end
 
-    if not springState then springState = {}; springStates[instance] = springState end
+        if onCancel(function() Spring._cancel(instance, id) end) then return end
+        completedCallbacks[id] = resolve
 
-    for propertyName, rawGoal in properties do
-        local origin = getProperty(instance, propertyName)
+        for propertyName, rawGoal in properties do
+            local origin = getProperty(instance, propertyName)
 
-        if typeof(rawGoal) ~= typeof(origin) then error(`bad property {propertyName} to Spring.target ({typeof(origin)} expected, got {typeof(rawGoal)})`, 2) end
-        if frequency == huge then setProperty(instance, propertyName, rawGoal); springState[propertyName] = nil continue end
+            if typeof(rawGoal) ~= typeof(origin) then error(`bad property {propertyName} to Spring.target ({typeof(origin)} expected, got {typeof(rawGoal)})`, 2) end
+            if frequency == huge then setProperty(instance, propertyName, rawGoal); springState[propertyName] = nil continue end
 
-        table.insert(interpolationProperties, { id = id, instance = instance, name = propertyName, rawGoal = rawGoal })
-        local spring = springState[propertyName]
+            local spring = springState[propertyName]
 
-        if not spring then
-            local metadata = typeMetadata[typeof(rawGoal)]
-            if not metadata then error(`unsupported type: {typeof(rawGoal)}`, 2) end
+            if not spring then
+                local metadata = typeMetadata[typeof(rawGoal)]
+                if not metadata then error(`unsupported type: {typeof(rawGoal)}`, 2) end
 
-            spring = metadata.springType(dampingRatio, frequency, origin, rawGoal, metadata)
-            springState[propertyName] = spring
+                spring = metadata.springType(dampingRatio, frequency, origin, rawGoal, metadata)
+                springState[propertyName] = spring
+            else
+                local index, interpolationProperty = getInterpolationPropertyOf(instance, propertyName)
+                local interpolationId = interpolationProperty.id
+                local completedCallback = completedCallbacks[interpolationId]
+
+                interpolationProperties[index] = nil
+                completedCallbacks[interpolationId] = nil
+
+                completedCallback()
+            end
+
+            table.insert(interpolationProperties, { id = id, instance = instance, name = propertyName, rawGoal = rawGoal })
+
+            spring:setGoal(rawGoal)
+            spring:setDampingRatio(dampingRatio)
+            spring:setFrequency(frequency)
         end
 
-        spring:setGoal(rawGoal)
-        spring:setDampingRatio(dampingRatio)
-        spring:setFrequency(frequency)
-    end
-
-	if not next(springState) then springStates[instance] = nil end
-    return promise
+	    if not next(springState) then springStates[instance] = nil end
+    end)
 end
 
 --// Events
@@ -508,8 +729,8 @@ RunService.PostSimulation:Connect(function(deltaTime) processSprings(renderSprin
 
 --// Types
 type LinearSpring = typeof(LinearSpring.Constructor())
-type RotationSpring = typeof(RotationSpring.new())
-type CFrameSpring = typeof(CFrameSpring.new())
+type RotationSpring = typeof(RotationSpring.Constructor())
+type CFrameSpring = typeof(CFrameSpring.Constructor())
 
 type Magnitude = {number}
 type TypeMetadata<T> = {
@@ -527,11 +748,6 @@ type PropertyOverride<instance, value> = {
 	get: (instance: instance) -> value,
 	set: (instance: instance, value: value) -> nil
 }
-
-task.spawn(function()
-
-    while task.wait(1) do print(otherSpringStates, completedCallbacks, interpolationProperties) end
-end)
 
 --// End
 return table.freeze(Spring)
