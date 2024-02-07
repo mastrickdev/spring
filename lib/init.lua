@@ -61,9 +61,6 @@ local PSEUDO_PROPERTIES = {
 local renderSpringStates: {[Instance]: Properties} = {}
 local otherSpringStates: {[Instance]: Properties} = {}
 
-local completedCallbacks: {[number]: () -> nil} = {}
-local interpolationProperties: {[number]: { name: string, instance: Instance, id: number, rawGoal: any }} = {}
-
 --// Functions
 local function getSquaredMagnitude(magnitude: Magnitude)
 	local out = 0
@@ -169,57 +166,6 @@ function luvToRGB(luv: {number})
     return Color3.new( min(gammaCorrectD65(r), 1), min(gammaCorrectD65(g), 1), min(gammaCorrectD65(b), 1) )
 end
 
-local function getInterpolationPropertyOf(instance: Instance, propertyName: string)
-
-    for index, interpolationProperty in interpolationProperties do
-
-        if interpolationProperty.instance == instance and interpolationProperty.name == propertyName then return index, interpolationProperty end
-     end
-end
-
-local function haveInterpolationProperties(instance: Instance, id: number?)
-
-    for index, interpolationProperty in interpolationProperties do
-
-        if interpolationProperty.instance == instance then
-
-            if id then if interpolationProperty.id ~= id then continue end end
-            return index, interpolationProperty
-        end
-    end
-end
-
-local function clearInterpolationPropertiesWithSameGoal<T>(instance: Instance, propertyName: string, rawGoal: T)
-
-    for index, interpolationProperty in interpolationProperties do
-
-        if interpolationProperty.instance ~= instance then continue end
-        if interpolationProperty.name ~= propertyName then continue end
-        if interpolationProperty.rawGoal ~= rawGoal then continue end
-
-        local id = interpolationProperty.id
-        local completedCallback = completedCallbacks[id]
-
-        interpolationProperties[index] = nil
-        if not completedCallback then continue end
-
-        completedCallback()
-        completedCallbacks[id] = nil
-    end
-end
-
-local function cancelInterpolationPropertiesOf(instance: Instance)
-
-    for index, interpolationProperty in interpolationProperties do
-
-        if interpolationProperty.instance ~= instance then continue end
-        local id = interpolationProperty.id
-
-        interpolationProperties[index] = nil
-        completedCallbacks[id] = nil
-    end
-end
-
 local function processSprings(springStates: {[Instance]: Properties}, deltaTime: number)
 
 	for instance, springState in springStates do
@@ -227,17 +173,11 @@ local function processSprings(springStates: {[Instance]: Properties}, deltaTime:
 		for propertyName, spring: LinearSpring | RotationSpring | CFrameSpring in springState do
 
 			if spring:canSleep() then
-                local index, interpolationProperty = getInterpolationPropertyOf(instance, propertyName)
-                local id = interpolationProperty.id
-                local completedCallback = completedCallbacks[id]
 
-                interpolationProperties[index] = nil
                 springState[propertyName] = nil
-
 				setProperty(instance, propertyName, spring.rawGoal)
-                if not haveInterpolationProperties(instance, id) then completedCallbacks[id] = nil; completedCallback() end
 
-                clearInterpolationPropertiesWithSameGoal(instance, propertyName, spring.rawGoal)
+                spring.completedCallback()
 			else
 
 				setProperty(instance, propertyName, spring:step(deltaTime))
@@ -246,19 +186,6 @@ local function processSprings(springStates: {[Instance]: Properties}, deltaTime:
 
 		if not next(springState) then springStates[instance] = nil end
 	end
-end
-
-local function getBiggerCompletedCallbackId()
-    local biggerId = 1
-
-    for id in completedCallbacks do if id > biggerId then biggerId = id end end
-    return biggerId
-end
-
-local function getCompletedCallbackId()
-    local biggerId = getBiggerCompletedCallbackId()
-
-    for id = 1, biggerId + 1 do if not completedCallbacks[id] then return id end end
 end
 
 local function angleBetween(origin: CFrame, goal: CFrame)
@@ -323,6 +250,11 @@ end
 function LinearSpring:setFrequency(value: number)
 
     self.frequency = value
+end
+
+function LinearSpring:setCompletedCallback(callback: () -> nil)
+
+    self.completedCallback = callback
 end
 
 function LinearSpring:canSleep()
@@ -438,6 +370,11 @@ function RotationSpring:setFrequency(value: number)
     self.frequency = value
 end
 
+function RotationSpring:setCompletedCallback(callback: () -> nil)
+
+    self.completedCallback = callback
+end
+
 function RotationSpring:canSleep()
     local position = angleBetween(self.position, self.goal) < SLEEP_ROTATION_OFFSET
     local velocity = self.velocity.Magnitude < SLEEP_ROTATION_VELOCITY
@@ -544,6 +481,11 @@ function CFrameSpring:setFrequency(value: number)
 
     self.position:setFrequency(value)
     self.rotation:setFrequency(value)
+end
+
+function CFrameSpring:setCompletedCallback(callback: () -> nil)
+
+    self.completedCallback = callback
 end
 
 function CFrameSpring:canSleep()
@@ -669,8 +611,6 @@ function Spring._cancel(instance: Instance, id: number)
 
     otherSpringStates[instance] = nil
     renderSpringStates[instance] = nil
-
-    cancelInterpolationPropertiesOf(instance)
 end
 
 function Spring.target(instance: Instance, dampingRatio: number, frequency: number, properties: Properties)
@@ -688,11 +628,8 @@ function Spring.target(instance: Instance, dampingRatio: number, frequency: numb
         local springStates: {[Instance]: Properties} = if instance:IsA("Camera") then renderSpringStates else otherSpringStates
         local springState = springStates[instance]
 
-        local id = getCompletedCallbackId()
         if not springState then springState = {}; springStates[instance] = springState end
-
         if onCancel(function() Spring._cancel(instance, id) end) then return end
-        completedCallbacks[id] = resolve
 
         for propertyName, rawGoal in properties do
             local origin = getProperty(instance, propertyName)
@@ -709,19 +646,13 @@ function Spring.target(instance: Instance, dampingRatio: number, frequency: numb
                 spring = metadata.springType(dampingRatio, frequency, origin, rawGoal, metadata)
                 springState[propertyName] = spring
             else
-                local index, interpolationProperty = getInterpolationPropertyOf(instance, propertyName)
-                local interpolationId = interpolationProperty.id
-                local completedCallback = completedCallbacks[interpolationId]
 
-                interpolationProperties[index] = nil
-                completedCallbacks[interpolationId] = nil
-
-                completedCallback()
+                spring.completedCallback()
             end
 
-            table.insert(interpolationProperties, { id = id, instance = instance, name = propertyName, rawGoal = rawGoal })
-
+            spring:setCompletedCallback(resolve)
             spring:setGoal(rawGoal)
+
             spring:setDampingRatio(dampingRatio)
             spring:setFrequency(frequency)
         end
