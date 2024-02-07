@@ -605,7 +605,7 @@ local typeMetadata = {
 local Spring = {}
 
 --// Functions
-function Spring._cancel(instance: Instance, id: number)
+function Spring._cancel(instance: Instance)
 
     assertType(1, "Instance", instance)
 
@@ -629,7 +629,12 @@ function Spring.target(instance: Instance, dampingRatio: number, frequency: numb
         local springState = springStates[instance]
 
         if not springState then springState = {}; springStates[instance] = springState end
-        if onCancel(function() Spring._cancel(instance, id) end) then return end
+        if onCancel(function() Spring._cancel(instance) end) then return end
+
+        local amountOfOverwrites = 0
+        local amountOfProperties = 0
+
+        for propertyName in springState do if properties[propertyName] then amountOfOverwrites += 1 end amountOfProperties += 1 end
 
         for propertyName, rawGoal in properties do
             local origin = getProperty(instance, propertyName)
@@ -647,7 +652,7 @@ function Spring.target(instance: Instance, dampingRatio: number, frequency: numb
                 springState[propertyName] = spring
             else
 
-                spring.completedCallback()
+                if amountOfOverwrites == amountOfProperties then spring.completedCallback() end
             end
 
             spring:setCompletedCallback(resolve)
