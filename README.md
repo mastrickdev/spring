@@ -2,6 +2,14 @@
 
 Spring is an animation library for Roblox, which uses the method of harmonic response to create smooth and natural movements. Spring allows you to animate any property of any instance, using only two variables: **damping ratio** and **frequency**.
 
+## Wally Installation
+
+To install with wally, insert it above wally.toml [dependencies]
+
+```toml
+spring = "mastrickdev/spring@0.2.3"
+```
+
 ## Usability
 
 To use Spring, you need to first load the library:
