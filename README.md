@@ -4,7 +4,7 @@ Spring is an animation library for Roblox, which uses the method of harmonic res
 
 ## Wally Installation
 
-To install with wally, insert it above wally.toml [dependencies]
+To install with wally, insert it inside wally.toml [dependencies]
 
 ```toml
 spring = "mastrickdev/spring@0.2.3"
