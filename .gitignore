@@ -1,6 +1,6 @@
-# Project place file
+# Lock Files
 /spring.rbxlx
+/*.lock
 
-# Roblox Studio lock files
-/*.rbxlx.lock
-/*.rbxl.lock
+# Wally Dependencies
+package
